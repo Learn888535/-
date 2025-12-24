@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { SystemStatus, DetectionResult, ActivityLog, InferenceMode, SystemConfig, EmergencyContact } from './types';
 import VideoDisplay from './components/VideoDisplay';
 import StatsCard from './components/StatsCard';
@@ -12,16 +12,23 @@ const PRESETS = {
   DEEPSEEK: { name: 'DeepSeek', url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' }
 };
 
+const STORAGE_KEY = 'guardian_config_v16';
+const LOGS_KEY = 'guardian_logs_v16';
+
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'monitor' | 'history' | 'settings'>('monitor');
   const [status, setStatus] = useState<SystemStatus>(SystemStatus.IDLE);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'danger'>('all');
   const [editingContact, setEditingContact] = useState<EmergencyContact | null>(null);
-  const [editingLogNote, setEditingLogNote] = useState<{ id: string, note: string } | null>(null);
+  
+  // 升级后的日志编辑状态
+  const [editingLog, setEditingLog] = useState<ActivityLog | null>(null);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [config, setConfig] = useState<SystemConfig>(() => {
-    const saved = localStorage.getItem('guardian_config_v14');
+    const saved = localStorage.getItem(STORAGE_KEY);
     return saved ? JSON.parse(saved) : {
       mode: InferenceMode.CLOUD,
       localEndpoint: 'http://localhost:11434',
@@ -32,20 +39,23 @@ const App: React.FC = () => {
       contacts: [{ id: '1', name: '紧急呼救中心', phone: '120', relation: '公共服务', isPrimary: true }],
       ttsRate: 1.0,
       voiceType: 'ai',
-      aiVoiceName: 'Kore'
+      aiVoiceName: 'Kore',
+      customTtsUrl: '',
+      customTtsApiKey: '',
+      customTtsModel: ''
     };
   });
   
   const [lastDetection, setLastDetection] = useState<DetectionResult>({ isFallDetected: false, confidence: 0, reasoning: "就绪", posture: "none" });
   const [logs, setLogs] = useState<ActivityLog[]>(() => {
-    const saved = localStorage.getItem('guardian_logs_v14');
+    const saved = localStorage.getItem(LOGS_KEY);
     return saved ? JSON.parse(saved).map((l: any) => ({ ...l, timestamp: new Date(l.timestamp) })) : [];
   });
   const [countdown, setCountdown] = useState(10);
   const [currentTTS, setCurrentTTS] = useState<string>("");
 
-  useEffect(() => localStorage.setItem('guardian_config_v14', JSON.stringify(config)), [config]);
-  useEffect(() => localStorage.setItem('guardian_logs_v14', JSON.stringify(logs)), [logs]);
+  useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(config)), [config]);
+  useEffect(() => localStorage.setItem(LOGS_KEY, JSON.stringify(logs)), [logs]);
 
   const addLog = useCallback((event: string, type: ActivityLog['type'] = 'human', logStatus: ActivityLog['status'] = 'info') => {
     setLogs(prev => [{ id: Math.random().toString(36).substr(2, 9), timestamp: new Date(), event, type, status: logStatus, note: "" }, ...prev].slice(0, 500));
@@ -55,12 +65,35 @@ const App: React.FC = () => {
     setConfig(prev => ({ ...prev, customBaseUrl: preset.url, customModel: preset.model, mode: InferenceMode.CUSTOM }));
   };
 
-  const updateLogNote = (id: string, note: string) => {
-    setLogs(prev => prev.map(log => log.id === id ? { ...log, note } : log));
-    setEditingLogNote(null);
+  const handleUpdateLog = (updatedLog: ActivityLog) => {
+    setLogs(prev => prev.map(log => log.id === updatedLog.id ? updatedLog : log));
+    setEditingLog(null);
   };
 
-  const downloadLogs = () => {
+  // CSV 导出功能
+  const downloadLogsCSV = () => {
+    const header = ['编号', '时间', '事件内容', '类型', '风险等级', '备注'];
+    const rows = logs.map(log => [
+      log.id,
+      log.timestamp.toLocaleString(),
+      log.event.replace(/,/g, '，'), // 防止逗号冲突
+      log.type,
+      log.status,
+      (log.note || '').replace(/,/g, '，')
+    ]);
+
+    const csvContent = "\uFEFF" + [header, ...rows].map(e => e.join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `guardian_logs_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
+  const downloadLogsJSON = () => {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(logs, null, 2));
     const downloadAnchorNode = document.createElement('a');
     downloadAnchorNode.setAttribute("href", dataStr);
@@ -68,6 +101,32 @@ const App: React.FC = () => {
     document.body.appendChild(downloadAnchorNode);
     downloadAnchorNode.click();
     downloadAnchorNode.remove();
+  };
+
+  const exportConfig = () => {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(config, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", `guardian_config_backup.json`);
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+  };
+
+  const importConfig = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target?.result as string);
+        setConfig(imported);
+        alert("配置恢复成功！");
+      } catch (err) {
+        alert("无效的备份文件");
+      }
+    };
+    reader.readAsText(file);
   };
 
   const handleFrameAnalysis = useCallback(async (base64: string) => {
@@ -124,7 +183,6 @@ const App: React.FC = () => {
         </div>
       </nav>
 
-      {/* 主画布 */}
       <main className="flex-1 overflow-y-auto p-8 lg:p-12 custom-scrollbar relative">
         {activeTab === 'monitor' && (
           <div className="max-w-6xl mx-auto space-y-10 animate-in fade-in">
@@ -175,10 +233,16 @@ const App: React.FC = () => {
                 <h2 className="text-4xl font-black text-white italic tracking-tighter uppercase">安全存档</h2>
                 <p className="text-zinc-500 text-xs font-bold mt-2 tracking-widest uppercase">Archive Capacity: {logs.length} / 500</p>
               </div>
-              <div className="flex gap-4">
-                <button onClick={downloadLogs} className="px-6 py-2.5 bg-zinc-800 text-zinc-300 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-zinc-700 transition-all">
-                  <i className="fas fa-download mr-2"></i> 导出存档
-                </button>
+              <div className="flex gap-3">
+                <div className="flex bg-zinc-900 p-1 rounded-xl border border-white/5">
+                  <button onClick={downloadLogsCSV} className="px-4 py-2 text-zinc-400 hover:text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
+                    <i className="fas fa-file-csv"></i> CSV
+                  </button>
+                  <div className="w-[1px] bg-white/5 self-stretch my-2"></div>
+                  <button onClick={downloadLogsJSON} className="px-4 py-2 text-zinc-400 hover:text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
+                    <i className="fas fa-file-code"></i> JSON
+                  </button>
+                </div>
                 <div className="flex gap-2 bg-zinc-900 p-1.5 rounded-xl border border-white/5">
                   <button onClick={() => setHistoryFilter('all')} className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${historyFilter === 'all' ? 'bg-indigo-600 text-white shadow-lg' : 'text-zinc-500'}`}>全部</button>
                   <button onClick={() => setHistoryFilter('danger')} className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${historyFilter === 'danger' ? 'bg-rose-600 text-white shadow-lg' : 'text-zinc-500'}`}>仅异常</button>
@@ -197,28 +261,36 @@ const App: React.FC = () => {
                   .map((log, idx) => (
                     <div key={log.id} className={`flex flex-col gap-4 p-8 border-b border-white/5 hover:bg-white/[0.02] transition-all ${idx % 2 === 0 ? 'bg-transparent' : 'bg-white/[0.01]'}`}>
                       <div className="flex items-center gap-6">
-                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${log.status === 'danger' ? 'bg-rose-600/20 text-rose-500' : 'bg-indigo-600/20 text-indigo-500'}`}>
-                          <i className={`fas ${log.type === 'fall' ? 'fa-user-injured' : 'fa-walking'}`}></i>
+                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
+                          log.status === 'danger' ? 'bg-rose-600/20 text-rose-500 shadow-[0_0_15px_rgba(225,29,72,0.1)]' : 
+                          log.status === 'warning' ? 'bg-amber-600/20 text-amber-500' :
+                          'bg-indigo-600/20 text-indigo-500'
+                        }`}>
+                          <i className={`fas ${log.type === 'fall' ? 'fa-user-injured' : log.type === 'contact' ? 'fa-phone-alt' : 'fa-walking'}`}></i>
                         </div>
                         <div className="flex-1">
-                          <p className="text-sm font-bold text-zinc-100">{log.event}</p>
+                          <p className={`text-sm font-bold ${log.status === 'danger' ? 'text-rose-400' : 'text-zinc-100'}`}>{log.event}</p>
                           <div className="flex items-center gap-3 mt-1">
                              <p className="text-[10px] text-zinc-600 font-medium uppercase tracking-widest">{log.timestamp.toLocaleString()}</p>
-                             {log.note && <span className="text-[8px] bg-indigo-600/20 text-indigo-400 px-1.5 py-0.5 rounded font-black uppercase">已添加备注</span>}
+                             {log.note && <span className="text-[8px] bg-indigo-600/20 text-indigo-400 px-1.5 py-0.5 rounded font-black uppercase tracking-tighter">附备注</span>}
+                             <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded border ${
+                               log.status === 'danger' ? 'border-rose-500/30 text-rose-500' : 
+                               log.status === 'warning' ? 'border-amber-500/30 text-amber-500' :
+                               'border-indigo-500/30 text-indigo-500'
+                             }`}>{log.status}</span>
                           </div>
                         </div>
-                        <button onClick={() => setEditingLogNote({ id: log.id, note: log.note || "" })} className="text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:underline">
-                          <i className="fas fa-edit mr-1"></i> {log.note ? '编辑备注' : '添加备注'}
+                        <button onClick={() => setEditingLog(log)} className="text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:underline px-4 py-2 bg-white/5 rounded-lg border border-white/5">
+                          <i className="fas fa-edit mr-1"></i> 编辑
                         </button>
                       </div>
                       {log.note && (
                         <div className="ml-18 pl-4 border-l-2 border-indigo-600/30 py-1">
-                          <p className="text-xs text-zinc-400 italic">备注: {log.note}</p>
+                          <p className="text-xs text-zinc-400 italic font-medium leading-relaxed">{log.note}</p>
                         </div>
                       )}
                     </div>
                   ))}
-                {logs.length === 0 && <div className="p-20 text-center text-zinc-700 font-bold uppercase tracking-widest">暂无记录</div>}
               </div>
             </div>
           </div>
@@ -243,18 +315,17 @@ const App: React.FC = () => {
                     <div className="space-y-4 animate-in fade-in zoom-in-95">
                       <div className="space-y-1">
                         <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">Endpoint URL</label>
-                        <input type="text" value={config.localEndpoint} onChange={e => setConfig({...config, localEndpoint: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-indigo-400 focus:border-indigo-500 outline-none" placeholder="http://localhost:11434" />
+                        <input type="text" value={config.localEndpoint} onChange={e => setConfig({...config, localEndpoint: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-indigo-400 focus:border-indigo-500 outline-none" />
                       </div>
                       <div className="space-y-1">
                         <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">Model Name</label>
-                        <input type="text" value={config.localModel} onChange={e => setConfig({...config, localModel: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" placeholder="llava:latest" />
+                        <input type="text" value={config.localModel} onChange={e => setConfig({...config, localModel: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" />
                       </div>
                     </div>
                   )}
 
                   {config.mode === InferenceMode.CUSTOM && (
                     <div className="space-y-6 animate-in fade-in zoom-in-95">
-                      {/* 国产模型快捷配置 */}
                       <div className="space-y-3">
                         <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">国产模型快捷填充</label>
                         <div className="grid grid-cols-2 gap-2">
@@ -269,21 +340,19 @@ const App: React.FC = () => {
                       <div className="space-y-4 pt-4 border-t border-white/5">
                         <div className="space-y-1">
                           <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">API Base URL</label>
-                          <input type="text" value={config.customBaseUrl} onChange={e => setConfig({...config, customBaseUrl: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-indigo-400 focus:border-indigo-500 outline-none" placeholder="https://api.openai.com/v1" />
+                          <input type="text" value={config.customBaseUrl} onChange={e => setConfig({...config, customBaseUrl: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-indigo-400 focus:border-indigo-500 outline-none" />
                         </div>
                         <div className="space-y-1">
                           <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">API Key</label>
-                          <input type="password" value={config.customApiKey} onChange={e => setConfig({...config, customApiKey: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" placeholder="sk-..." />
+                          <input type="password" value={config.customApiKey} onChange={e => setConfig({...config, customApiKey: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" />
                         </div>
                         <div className="space-y-1">
                           <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">Model ID</label>
-                          <input type="text" value={config.customModel} onChange={e => setConfig({...config, customModel: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" placeholder="gpt-4-vision-preview" />
+                          <input type="text" value={config.customModel} onChange={e => setConfig({...config, customModel: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" />
                         </div>
                       </div>
                     </div>
                   )}
-                  
-                  <p className="text-[9px] text-zinc-600 italic px-2">提示：CUSTOM 模式兼容 OpenAI 视觉 API 规范。适用于通义千问 VL、智谱 GLM-4V 等。</p>
                 </div>
               </section>
 
@@ -306,11 +375,22 @@ const App: React.FC = () => {
                     </div>
                     <input type="range" min="0.5" max="2" step="0.1" value={config.ttsRate} onChange={e => setConfig({...config, ttsRate: parseFloat(e.target.value)})} className="w-full accent-emerald-600 h-1 bg-zinc-800 rounded-full appearance-none cursor-pointer" />
                   </div>
-                  <button onClick={() => dispatchSpeak("系统链路测试。已应用国产模型预设，目前输出纯净中文播报。", config)}
-                    className="w-full py-4 bg-emerald-600/10 border border-emerald-500/20 rounded-xl text-[10px] font-black text-emerald-400 uppercase tracking-widest hover:bg-emerald-600/20 transition-all">
-                    声学链路测试
-                  </button>
                 </div>
+              </section>
+
+              {/* 配置备份与恢复 */}
+              <section className="lg:col-span-2 bg-zinc-900/40 border border-white/5 p-10 rounded-[2.5rem] shadow-xl">
+                <h3 className="text-lg font-black text-white italic mb-8 uppercase tracking-widest border-l-4 border-amber-600 pl-4">系统备份备选 (Local Backup)</h3>
+                <div className="flex flex-col md:flex-row gap-4 items-center">
+                  <button onClick={exportConfig} className="flex-1 py-4 bg-zinc-800 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-zinc-700 transition-all">
+                    <i className="fas fa-file-export mr-2"></i> 导出全量配置 (导出为 JSON 备份)
+                  </button>
+                  <button onClick={() => fileInputRef.current?.click()} className="flex-1 py-4 bg-amber-600/10 border border-amber-600/20 text-amber-500 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-amber-600/20 transition-all">
+                    <i className="fas fa-file-import mr-2"></i> 导入全量配置 (从 JSON 恢复)
+                  </button>
+                  <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={importConfig} />
+                </div>
+                <p className="text-[10px] text-zinc-600 mt-4 italic">注：主 API Key 已由系统环境安全管理，此备份包含所有自定义模型地址、API Key 及联络人信息。</p>
               </section>
 
               {/* 紧急联系人管理 */}
@@ -369,20 +449,66 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* 日志备注编辑弹窗 */}
-        {editingLogNote && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-2xl z-[100] flex items-center justify-center p-6">
-            <div className="bg-zinc-950 border border-white/10 p-10 rounded-[2.5rem] w-full max-w-lg shadow-2xl animate-in zoom-in duration-300">
-              <h3 className="text-xl font-black italic text-white uppercase mb-6">编辑日志备注</h3>
-              <textarea 
-                className="w-full h-40 bg-black border border-white/10 p-6 rounded-2xl text-sm text-zinc-200 resize-none outline-none focus:border-indigo-500 transition-all" 
-                placeholder="在此输入事件描述或备注..." 
-                value={editingLogNote.note} 
-                onChange={e => setEditingLogNote({...editingLogNote, note: e.target.value})}
-              />
-              <div className="flex gap-4 mt-8">
-                <button onClick={() => setEditingLogNote(null)} className="flex-1 py-4 bg-zinc-900 rounded-xl text-[10px] font-black uppercase text-zinc-500 tracking-widest">放弃修改</button>
-                <button onClick={() => updateLogNote(editingLogNote.id, editingLogNote.note)} className="flex-1 py-4 bg-indigo-600 rounded-xl text-[10px] font-black uppercase text-white shadow-lg shadow-indigo-600/30 tracking-widest">保存备注</button>
+        {/* 升级后的日志详情编辑器 */}
+        {editingLog && (
+          <div className="fixed inset-0 bg-black/95 backdrop-blur-3xl z-[100] flex items-center justify-center p-6 animate-in fade-in duration-300">
+            <div className="bg-zinc-950 border border-white/10 p-10 rounded-[3rem] w-full max-w-2xl shadow-2xl">
+              <div className="flex justify-between items-center mb-10">
+                <div>
+                  <h3 className="text-2xl font-black italic text-white uppercase tracking-tighter">日志深度编辑</h3>
+                  <p className="text-[10px] text-zinc-500 font-black uppercase tracking-widest mt-1">Record ID: {editingLog.id}</p>
+                </div>
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                  editingLog.status === 'danger' ? 'bg-rose-500 text-white' : 
+                  editingLog.status === 'warning' ? 'bg-amber-500 text-white' : 'bg-indigo-600 text-white'
+                }`}>
+                  <i className="fas fa-file-signature text-xl"></i>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">事件内容</label>
+                  <input 
+                    className="w-full bg-black border border-white/10 p-4 rounded-xl text-sm font-bold text-zinc-100 outline-none focus:border-indigo-600 transition-all" 
+                    value={editingLog.event} 
+                    onChange={e => setEditingLog({...editingLog, event: e.target.value})}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">风险等级</label>
+                  <div className="grid grid-cols-3 gap-3">
+                    {['info', 'warning', 'danger'].map(s => (
+                      <button 
+                        key={s} 
+                        onClick={() => setEditingLog({...editingLog, status: s as any})}
+                        className={`py-3 rounded-xl text-[10px] font-black uppercase transition-all ${
+                          editingLog.status === s ? 
+                          (s === 'danger' ? 'bg-rose-600 text-white' : s === 'warning' ? 'bg-amber-600 text-white' : 'bg-indigo-600 text-white') : 
+                          'bg-zinc-900 text-zinc-600 border border-white/5'
+                        }`}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">备注信息</label>
+                  <textarea 
+                    className="w-full h-32 bg-black border border-white/10 p-4 rounded-xl text-sm text-zinc-300 resize-none outline-none focus:border-indigo-600 transition-all font-medium" 
+                    placeholder="输入额外说明或处理结果..." 
+                    value={editingLog.note || ""} 
+                    onChange={e => setEditingLog({...editingLog, note: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-4 mt-12">
+                <button onClick={() => setEditingLog(null)} className="flex-1 py-4 bg-zinc-900 rounded-xl text-[10px] font-black uppercase text-zinc-500 tracking-widest hover:text-white transition-all">放弃修改</button>
+                <button onClick={() => handleUpdateLog(editingLog)} className="flex-1 py-4 bg-indigo-600 rounded-xl text-[10px] font-black uppercase text-white shadow-lg shadow-indigo-600/30 tracking-widest hover:scale-[1.02] transition-all">保存更改</button>
               </div>
             </div>
           </div>
