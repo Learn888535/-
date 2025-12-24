@@ -1,0 +1,8 @@
+
+/* 基础样式，消除浏览器默认边距 */
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #050505;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}

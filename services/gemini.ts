@@ -2,10 +2,11 @@
 import { GoogleGenAI, GenerateContentResponse, Modality } from "@google/genai";
 import { DetectionResult } from "../types";
 
-const API_KEY = process.env.API_KEY || "";
+// Removed global API_KEY constant to use process.env.API_KEY directly as per guidelines
 
 export const analyzeScene = async (base64Image: string): Promise<DetectionResult> => {
-  const ai = new GoogleGenAI({ apiKey: API_KEY });
+  // Use process.env.API_KEY directly in constructor
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   const prompt = `
     Analyze this camera frame for elderly safety monitoring.
@@ -41,6 +42,7 @@ export const analyzeScene = async (base64Image: string): Promise<DetectionResult
       }
     });
 
+    // Extract text directly from getter
     const text = response.text || "{}";
     const data = JSON.parse(text);
     return {
@@ -61,7 +63,8 @@ export const analyzeScene = async (base64Image: string): Promise<DetectionResult
 };
 
 export const createLiveSession = async (callbacks: any) => {
-  const ai = new GoogleGenAI({ apiKey: API_KEY });
+  // Use process.env.API_KEY directly in constructor
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   return ai.live.connect({
     model: 'gemini-2.5-flash-native-audio-preview-09-2025',
     callbacks,
