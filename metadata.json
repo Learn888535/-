@@ -1,0 +1,8 @@
+{
+  "name": "GuardianDepth AI - Fall Detection System",
+  "description": "An advanced fall detection monitoring system using AI-powered vision analysis and real-time voice interaction for elderly care and safety.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
