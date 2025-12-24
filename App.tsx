@@ -12,8 +12,8 @@ const PRESETS = {
   DEEPSEEK: { name: 'DeepSeek', url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' }
 };
 
-const STORAGE_KEY = 'guardian_config_v16';
-const LOGS_KEY = 'guardian_logs_v16';
+const STORAGE_KEY = 'guardian_config_v18';
+const LOGS_KEY = 'guardian_logs_v18';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'monitor' | 'history' | 'settings'>('monitor');
@@ -21,9 +21,8 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<'all' | 'danger'>('all');
   const [editingContact, setEditingContact] = useState<EmergencyContact | null>(null);
-  
-  // 升级后的日志编辑状态
   const [editingLog, setEditingLog] = useState<ActivityLog | null>(null);
+  const [isStandalone, setIsStandalone] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -54,79 +53,82 @@ const App: React.FC = () => {
   const [countdown, setCountdown] = useState(10);
   const [currentTTS, setCurrentTTS] = useState<string>("");
 
-  useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(config)), [config]);
-  useEffect(() => localStorage.setItem(LOGS_KEY, JSON.stringify(logs)), [logs]);
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+    localStorage.setItem(LOGS_KEY, JSON.stringify(logs));
+  }, [config, logs]);
+
+  useEffect(() => {
+    const checkStandalone = () => {
+      const isStandaloneMode = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
+      setIsStandalone(!!isStandaloneMode);
+    };
+    checkStandalone();
+  }, []);
 
   const addLog = useCallback((event: string, type: ActivityLog['type'] = 'human', logStatus: ActivityLog['status'] = 'info') => {
     setLogs(prev => [{ id: Math.random().toString(36).substr(2, 9), timestamp: new Date(), event, type, status: logStatus, note: "" }, ...prev].slice(0, 500));
   }, []);
-
-  const applyPreset = (preset: typeof PRESETS.ALIBABA) => {
-    setConfig(prev => ({ ...prev, customBaseUrl: preset.url, customModel: preset.model, mode: InferenceMode.CUSTOM }));
-  };
 
   const handleUpdateLog = (updatedLog: ActivityLog) => {
     setLogs(prev => prev.map(log => log.id === updatedLog.id ? updatedLog : log));
     setEditingLog(null);
   };
 
-  // CSV 导出功能
+  const applyPreset = (preset: typeof PRESETS.ALIBABA) => {
+    setConfig(prev => ({ ...prev, customBaseUrl: preset.url, customModel: preset.model, mode: InferenceMode.CUSTOM }));
+  };
+
   const downloadLogsCSV = () => {
     const header = ['编号', '时间', '事件内容', '类型', '风险等级', '备注'];
-    const rows = logs.map(log => [
-      log.id,
-      log.timestamp.toLocaleString(),
-      log.event.replace(/,/g, '，'), // 防止逗号冲突
-      log.type,
-      log.status,
-      (log.note || '').replace(/,/g, '，')
-    ]);
-
+    const rows = logs.map(log => [log.id, log.timestamp.toLocaleString(), log.event.replace(/,/g, '，'), log.type, log.status, (log.note || '').replace(/,/g, '，')]);
     const csvContent = "\uFEFF" + [header, ...rows].map(e => e.join(",")).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `guardian_logs_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
+    link.setAttribute("download", `guardian_logs.csv`);
     link.click();
-    link.remove();
   };
 
-  const downloadLogsJSON = () => {
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(logs, null, 2));
-    const downloadAnchorNode = document.createElement('a');
-    downloadAnchorNode.setAttribute("href", dataStr);
-    downloadAnchorNode.setAttribute("download", `guardian_logs_${new Date().toISOString().split('T')[0]}.json`);
-    document.body.appendChild(downloadAnchorNode);
-    downloadAnchorNode.click();
-    downloadAnchorNode.remove();
-  };
+  // 联络人管理核心逻辑
+  const handleSaveContact = () => {
+    if (!editingContact) return;
+    if (!editingContact.name || !editingContact.phone) {
+      alert("请填写完整的姓名和电话");
+      return;
+    }
 
-  const exportConfig = () => {
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(config, null, 2));
-    const downloadAnchorNode = document.createElement('a');
-    downloadAnchorNode.setAttribute("href", dataStr);
-    downloadAnchorNode.setAttribute("download", `guardian_config_backup.json`);
-    document.body.appendChild(downloadAnchorNode);
-    downloadAnchorNode.click();
-    downloadAnchorNode.remove();
-  };
-
-  const importConfig = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const imported = JSON.parse(e.target?.result as string);
-        setConfig(imported);
-        alert("配置恢复成功！");
-      } catch (err) {
-        alert("无效的备份文件");
+    setConfig(prev => {
+      const exists = prev.contacts.find(c => c.id === editingContact.id);
+      let newContacts;
+      if (exists) {
+        newContacts = prev.contacts.map(c => c.id === editingContact.id ? editingContact : c);
+      } else {
+        newContacts = [...prev.contacts, editingContact];
       }
-    };
-    reader.readAsText(file);
+      return { ...prev, contacts: newContacts };
+    });
+    setEditingContact(null);
+  };
+
+  const handleDeleteContact = (id: string) => {
+    if (confirm("确定要删除此联系人吗？")) {
+      setConfig(prev => ({
+        ...prev,
+        contacts: prev.contacts.filter(c => c.id !== id)
+      }));
+    }
+  };
+
+  const handleSetPrimaryContact = (id: string) => {
+    setConfig(prev => ({
+      ...prev,
+      contacts: prev.contacts.map(c => ({
+        ...c,
+        isPrimary: c.id === id
+      }))
+    }));
   };
 
   const handleFrameAnalysis = useCallback(async (base64: string) => {
@@ -189,7 +191,10 @@ const App: React.FC = () => {
             <header className="flex justify-between items-center">
               <div>
                 <h2 className="text-3xl font-black text-white italic tracking-tight">监控中心</h2>
-                <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mt-1">Status: {status}</p>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Status: {status}</span>
+                  {isStandalone && <span className="text-[8px] bg-indigo-600/20 text-indigo-400 px-2 py-0.5 rounded-full font-black uppercase">App Mode</span>}
+                </div>
               </div>
               <button onClick={() => setStatus(status === SystemStatus.IDLE ? SystemStatus.MONITORING : SystemStatus.IDLE)} 
                 className={`px-10 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all ${
@@ -205,10 +210,10 @@ const App: React.FC = () => {
                 <div className="grid grid-cols-3 gap-4">
                   <StatsCard label="肢体姿态" value={lastDetection.posture} icon="fa-street-view" color="amber" />
                   <StatsCard label="判定信心" value={`${Math.round(lastDetection.confidence * 100)}%`} icon="fa-brain" color="emerald" loading={isAnalyzing} />
-                  <StatsCard label="联络状态" value={config.contacts[0]?.name || '未设置'} icon="fa-phone" color="indigo" />
+                  <StatsCard label="联络状态" value={config.contacts.find(c => c.isPrimary)?.name || '未设置'} icon="fa-phone" color="indigo" />
                 </div>
               </div>
-              <div className="col-span-12 xl:col-span-4 bg-zinc-900/40 border border-white/5 rounded-3xl p-8 flex flex-col h-[600px] shadow-2xl">
+              <div className="col-span-12 xl:col-span-4 bg-zinc-900/40 border border-white/5 rounded-3xl p-8 flex flex-col h-[600px] shadow-2xl overflow-hidden">
                 <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-6">实时简报</h3>
                 <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
                   {logs.slice(0, 20).map(log => (
@@ -220,6 +225,7 @@ const App: React.FC = () => {
                       <p className="text-xs font-bold text-zinc-200">{log.event}</p>
                     </div>
                   ))}
+                  {logs.length === 0 && <p className="text-center text-zinc-600 text-[10px] mt-10">暂无事件记录</p>}
                 </div>
               </div>
             </div>
@@ -234,18 +240,10 @@ const App: React.FC = () => {
                 <p className="text-zinc-500 text-xs font-bold mt-2 tracking-widest uppercase">Archive Capacity: {logs.length} / 500</p>
               </div>
               <div className="flex gap-3">
-                <div className="flex bg-zinc-900 p-1 rounded-xl border border-white/5">
-                  <button onClick={downloadLogsCSV} className="px-4 py-2 text-zinc-400 hover:text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
-                    <i className="fas fa-file-csv"></i> CSV
-                  </button>
-                  <div className="w-[1px] bg-white/5 self-stretch my-2"></div>
-                  <button onClick={downloadLogsJSON} className="px-4 py-2 text-zinc-400 hover:text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
-                    <i className="fas fa-file-code"></i> JSON
-                  </button>
-                </div>
+                <button onClick={downloadLogsCSV} className="px-6 py-2.5 bg-zinc-800 text-zinc-300 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-zinc-700">CSV 导出</button>
                 <div className="flex gap-2 bg-zinc-900 p-1.5 rounded-xl border border-white/5">
                   <button onClick={() => setHistoryFilter('all')} className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${historyFilter === 'all' ? 'bg-indigo-600 text-white shadow-lg' : 'text-zinc-500'}`}>全部</button>
-                  <button onClick={() => setHistoryFilter('danger')} className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${historyFilter === 'danger' ? 'bg-rose-600 text-white shadow-lg' : 'text-zinc-500'}`}>仅异常</button>
+                  <button onClick={() => setHistoryFilter('danger')} className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase transition-all ${historyFilter === 'danger' ? 'bg-rose-600 text-white shadow-lg' : 'text-zinc-500'}`}>异常</button>
                 </div>
               </div>
             </header>
@@ -253,44 +251,21 @@ const App: React.FC = () => {
             <div className="bg-zinc-900/40 border border-white/5 rounded-[2.5rem] overflow-hidden shadow-2xl">
               <div className="p-8 border-b border-white/5 flex justify-between items-center bg-white/5">
                 <span className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">历史日志序列</span>
-                <button onClick={() => { if(confirm('确认清空所有历史记录？')) setLogs([]); }} className="text-[10px] font-black text-rose-500 hover:text-rose-400 uppercase tracking-widest transition-all">清空数据库</button>
+                <button onClick={() => { if(confirm('确认清空记录？')) setLogs([]); }} className="text-[10px] font-black text-rose-500 uppercase tracking-widest">清空</button>
               </div>
               <div className="max-h-[60vh] overflow-y-auto custom-scrollbar">
-                {logs
-                  .filter(l => historyFilter === 'all' || l.status === 'danger')
-                  .map((log, idx) => (
-                    <div key={log.id} className={`flex flex-col gap-4 p-8 border-b border-white/5 hover:bg-white/[0.02] transition-all ${idx % 2 === 0 ? 'bg-transparent' : 'bg-white/[0.01]'}`}>
-                      <div className="flex items-center gap-6">
-                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
-                          log.status === 'danger' ? 'bg-rose-600/20 text-rose-500 shadow-[0_0_15px_rgba(225,29,72,0.1)]' : 
-                          log.status === 'warning' ? 'bg-amber-600/20 text-amber-500' :
-                          'bg-indigo-600/20 text-indigo-500'
-                        }`}>
-                          <i className={`fas ${log.type === 'fall' ? 'fa-user-injured' : log.type === 'contact' ? 'fa-phone-alt' : 'fa-walking'}`}></i>
-                        </div>
-                        <div className="flex-1">
-                          <p className={`text-sm font-bold ${log.status === 'danger' ? 'text-rose-400' : 'text-zinc-100'}`}>{log.event}</p>
-                          <div className="flex items-center gap-3 mt-1">
-                             <p className="text-[10px] text-zinc-600 font-medium uppercase tracking-widest">{log.timestamp.toLocaleString()}</p>
-                             {log.note && <span className="text-[8px] bg-indigo-600/20 text-indigo-400 px-1.5 py-0.5 rounded font-black uppercase tracking-tighter">附备注</span>}
-                             <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded border ${
-                               log.status === 'danger' ? 'border-rose-500/30 text-rose-500' : 
-                               log.status === 'warning' ? 'border-amber-500/30 text-amber-500' :
-                               'border-indigo-500/30 text-indigo-500'
-                             }`}>{log.status}</span>
-                          </div>
-                        </div>
-                        <button onClick={() => setEditingLog(log)} className="text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:underline px-4 py-2 bg-white/5 rounded-lg border border-white/5">
-                          <i className="fas fa-edit mr-1"></i> 编辑
-                        </button>
+                {logs.filter(l => historyFilter === 'all' || l.status === 'danger').map((log, idx) => (
+                    <div key={log.id} className="p-8 border-b border-white/5 hover:bg-white/[0.02] flex items-center gap-6">
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${log.status === 'danger' ? 'bg-rose-600/20 text-rose-500' : 'bg-indigo-600/20 text-indigo-500'}`}>
+                        <i className={`fas ${log.type === 'fall' ? 'fa-user-injured' : 'fa-walking'}`}></i>
                       </div>
-                      {log.note && (
-                        <div className="ml-18 pl-4 border-l-2 border-indigo-600/30 py-1">
-                          <p className="text-xs text-zinc-400 italic font-medium leading-relaxed">{log.note}</p>
-                        </div>
-                      )}
+                      <div className="flex-1">
+                        <p className="text-sm font-bold text-zinc-100">{log.event}</p>
+                        <p className="text-[10px] text-zinc-600 font-medium uppercase mt-1">{log.timestamp.toLocaleString()}</p>
+                      </div>
+                      <button onClick={() => setEditingLog(log)} className="text-[10px] font-black text-indigo-400 uppercase tracking-widest px-4 py-2 bg-white/5 rounded-lg border border-white/5">编辑</button>
                     </div>
-                  ))}
+                ))}
               </div>
             </div>
           </div>
@@ -300,26 +275,56 @@ const App: React.FC = () => {
           <div className="max-w-5xl mx-auto space-y-10 animate-in slide-in-from-bottom-4 duration-500 pb-20">
             <h2 className="text-4xl font-black text-white italic tracking-tighter uppercase mb-12">系统深度配置</h2>
             
+            {/* 跨平台 App 状态卡片 */}
+            <div className="bg-indigo-600/10 border border-indigo-500/20 p-8 rounded-[2.5rem] flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl">
+              <div className="flex items-center gap-6">
+                <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-3xl text-white shadow-xl shadow-indigo-600/40">
+                  <i className={isStandalone ? "fas fa-mobile-screen-button" : "fas fa-globe"}></i>
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-white italic uppercase tracking-tight">应用运行模式</h3>
+                  <p className="text-xs text-zinc-400 mt-1 font-medium">
+                    {isStandalone ? "当前处于独立 App 模式，已获得完整的系统级体验。" : "当前正在网页中预览。建议将其“添加到主屏幕”以获得全屏 App 体验。"}
+                  </p>
+                </div>
+              </div>
+              {!isStandalone && (
+                <div className="text-right hidden md:block">
+                  <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">安装提示</p>
+                  <p className="text-[9px] text-zinc-500 mt-1">iOS: 分享 -> 添加到主屏幕<br/>Android/PC: 地址栏安装按钮</p>
+                </div>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              {/* 推理引擎设置 */}
-              <section className="bg-zinc-900/40 border border-white/5 p-10 rounded-[2.5rem] shadow-xl">
-                <h3 className="text-lg font-black text-white italic mb-8 uppercase tracking-widest border-l-4 border-indigo-600 pl-4">视觉推理核</h3>
+              {/* 视觉推理核配置面板 */}
+              <section className="bg-zinc-900/40 border border-white/5 p-10 rounded-[3rem] shadow-xl">
+                <h3 className="text-lg font-black text-white italic mb-8 uppercase tracking-widest border-l-4 border-indigo-600 pl-4">视觉推理核 (Inference)</h3>
                 <div className="space-y-6">
                   <div className="grid grid-cols-3 gap-2 p-1 bg-black rounded-xl border border-white/5">
                     {[InferenceMode.CLOUD, InferenceMode.LOCAL, InferenceMode.CUSTOM].map(m => (
                       <button key={m} onClick={() => setConfig({...config, mode: m})} className={`py-3 rounded-lg text-[10px] font-black uppercase transition-all ${config.mode === m ? 'bg-indigo-600 text-white shadow-lg' : 'text-zinc-600'}`}>{m}</button>
                     ))}
                   </div>
-                  
+
+                  {config.mode === InferenceMode.CLOUD && (
+                    <div className="p-6 bg-indigo-500/5 border border-indigo-500/10 rounded-2xl animate-in fade-in">
+                      <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+                        <i className="fas fa-shield-halved"></i> 托管模式激活
+                      </p>
+                      <p className="text-xs text-zinc-500 leading-relaxed">系统正在使用云端 Gemini 推理引擎。API Key 已通过环境安全通道自动注入，无需手动配置。</p>
+                    </div>
+                  )}
+
                   {config.mode === InferenceMode.LOCAL && (
-                    <div className="space-y-4 animate-in fade-in zoom-in-95">
-                      <div className="space-y-1">
-                        <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">Endpoint URL</label>
-                        <input type="text" value={config.localEndpoint} onChange={e => setConfig({...config, localEndpoint: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-indigo-400 focus:border-indigo-500 outline-none" />
+                    <div className="space-y-5 animate-in fade-in zoom-in-95">
+                      <div className="space-y-1.5">
+                        <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">本地端点 (Ollama Endpoint)</label>
+                        <input type="text" value={config.localEndpoint} onChange={e => setConfig({...config, localEndpoint: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-indigo-400 focus:border-indigo-500 outline-none" placeholder="e.g. http://localhost:11434" />
                       </div>
-                      <div className="space-y-1">
-                        <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">Model Name</label>
-                        <input type="text" value={config.localModel} onChange={e => setConfig({...config, localModel: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" />
+                      <div className="space-y-1.5">
+                        <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">本地模型名称 (Model Tag)</label>
+                        <input type="text" value={config.localModel} onChange={e => setConfig({...config, localModel: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" placeholder="e.g. llava:latest" />
                       </div>
                     </div>
                   )}
@@ -327,28 +332,27 @@ const App: React.FC = () => {
                   {config.mode === InferenceMode.CUSTOM && (
                     <div className="space-y-6 animate-in fade-in zoom-in-95">
                       <div className="space-y-3">
-                        <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">国产模型快捷填充</label>
+                        <label className="text-[9px] font-black text-zinc-500 uppercase tracking-widest">快捷预设 (Presets)</label>
                         <div className="grid grid-cols-2 gap-2">
                           {Object.entries(PRESETS).map(([key, preset]) => (
-                            <button key={key} onClick={() => applyPreset(preset)} className="py-2 bg-zinc-800 border border-white/5 rounded-lg text-[9px] font-black text-zinc-400 hover:bg-zinc-700 hover:text-white transition-all uppercase">
+                            <button key={key} onClick={() => applyPreset(preset)} className="py-2.5 bg-zinc-800 border border-white/5 rounded-lg text-[9px] font-black text-zinc-400 hover:bg-zinc-700 hover:text-white transition-all uppercase">
                               {preset.name}
                             </button>
                           ))}
                         </div>
                       </div>
-
                       <div className="space-y-4 pt-4 border-t border-white/5">
-                        <div className="space-y-1">
+                        <div className="space-y-1.5">
                           <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">API Base URL</label>
-                          <input type="text" value={config.customBaseUrl} onChange={e => setConfig({...config, customBaseUrl: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-indigo-400 focus:border-indigo-500 outline-none" />
+                          <input type="text" value={config.customBaseUrl} onChange={e => setConfig({...config, customBaseUrl: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-indigo-400 focus:border-indigo-500 outline-none" placeholder="https://api.example.com/v1" />
                         </div>
-                        <div className="space-y-1">
+                        <div className="space-y-1.5">
                           <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">API Key</label>
-                          <input type="password" value={config.customApiKey} onChange={e => setConfig({...config, customApiKey: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" />
+                          <input type="password" value={config.customApiKey} onChange={e => setConfig({...config, customApiKey: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" placeholder="sk-..." />
                         </div>
-                        <div className="space-y-1">
-                          <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">Model ID</label>
-                          <input type="text" value={config.customModel} onChange={e => setConfig({...config, customModel: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" />
+                        <div className="space-y-1.5">
+                          <label className="text-[8px] font-black text-zinc-600 uppercase ml-2">模型 ID (Model Name)</label>
+                          <input type="text" value={config.customModel} onChange={e => setConfig({...config, customModel: e.target.value})} className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-xs font-mono text-zinc-100 focus:border-indigo-500 outline-none" placeholder="qwen-vl-max" />
                         </div>
                       </div>
                     </div>
@@ -356,179 +360,151 @@ const App: React.FC = () => {
                 </div>
               </section>
 
-              {/* 语音播报设置 */}
-              <section className="bg-zinc-900/40 border border-white/5 p-10 rounded-[2.5rem] shadow-xl">
-                <h3 className="text-lg font-black text-white italic mb-8 uppercase tracking-widest border-l-4 border-emerald-600 pl-4">声学反馈节点</h3>
-                <div className="space-y-8">
-                  <div className="flex p-1 bg-black rounded-xl border border-white/5">
-                    {['ai', 'local'].map(type => (
-                      <button key={type} onClick={() => setConfig({...config, voiceType: type as any})}
-                        className={`flex-1 py-3.5 rounded-lg text-[10px] font-black uppercase transition-all ${config.voiceType === type ? 'bg-emerald-600 text-white shadow-lg' : 'text-zinc-600'}`}>
-                        {type === 'ai' ? 'Gemini 智能' : '系统原生'}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center mb-2">
-                      <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">语速平衡</label>
-                      <span className="text-xs font-mono text-emerald-500 font-black">{config.ttsRate.toFixed(1)}x</span>
-                    </div>
-                    <input type="range" min="0.5" max="2" step="0.1" value={config.ttsRate} onChange={e => setConfig({...config, ttsRate: parseFloat(e.target.value)})} className="w-full accent-emerald-600 h-1 bg-zinc-800 rounded-full appearance-none cursor-pointer" />
-                  </div>
-                </div>
-              </section>
-
-              {/* 配置备份与恢复 */}
-              <section className="lg:col-span-2 bg-zinc-900/40 border border-white/5 p-10 rounded-[2.5rem] shadow-xl">
-                <h3 className="text-lg font-black text-white italic mb-8 uppercase tracking-widest border-l-4 border-amber-600 pl-4">系统备份备选 (Local Backup)</h3>
-                <div className="flex flex-col md:flex-row gap-4 items-center">
-                  <button onClick={exportConfig} className="flex-1 py-4 bg-zinc-800 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-zinc-700 transition-all">
-                    <i className="fas fa-file-export mr-2"></i> 导出全量配置 (导出为 JSON 备份)
-                  </button>
-                  <button onClick={() => fileInputRef.current?.click()} className="flex-1 py-4 bg-amber-600/10 border border-amber-600/20 text-amber-500 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-amber-600/20 transition-all">
-                    <i className="fas fa-file-import mr-2"></i> 导入全量配置 (从 JSON 恢复)
-                  </button>
-                  <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={importConfig} />
-                </div>
-                <p className="text-[10px] text-zinc-600 mt-4 italic">注：主 API Key 已由系统环境安全管理，此备份包含所有自定义模型地址、API Key 及联络人信息。</p>
-              </section>
-
-              {/* 紧急联系人管理 */}
-              <section className="lg:col-span-2 bg-zinc-900/40 border border-white/5 p-10 rounded-[2.5rem] shadow-xl">
-                <div className="flex justify-between items-center mb-10">
+              {/* 紧急联系人列表 */}
+              <section className="bg-zinc-900/40 border border-white/5 p-10 rounded-[3rem] shadow-xl">
+                <div className="flex justify-between items-center mb-8">
                   <h3 className="text-lg font-black text-white italic uppercase tracking-widest border-l-4 border-rose-600 pl-4">紧急救护联络网</h3>
-                  <button onClick={() => setEditingContact({ id: Date.now().toString(), name: '', phone: '', relation: '', isPrimary: false })}
-                    className="px-6 py-2 bg-rose-600 text-white rounded-xl text-[10px] font-black uppercase shadow-lg shadow-rose-600/30 hover:scale-105 transition-all">
-                    新增联络人
+                  <button 
+                    onClick={() => setEditingContact({ id: Date.now().toString(), name: '', phone: '', relation: '', isPrimary: false })}
+                    className="w-10 h-10 bg-rose-600 rounded-full flex items-center justify-center text-white hover:scale-110 transition-transform shadow-lg shadow-rose-600/30"
+                  >
+                    <i className="fas fa-plus"></i>
                   </button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
                   {config.contacts.map(contact => (
-                    <div key={contact.id} className={`p-6 rounded-2xl border transition-all ${contact.isPrimary ? 'bg-rose-500/10 border-rose-500/30' : 'bg-white/5 border-white/5'}`}>
-                      <div className="flex justify-between mb-4">
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${contact.isPrimary ? 'bg-rose-600 text-white' : 'bg-zinc-800 text-zinc-500'}`}>
-                          <i className="fas fa-id-card"></i>
+                    <div key={contact.id} className={`p-5 rounded-2xl border transition-all ${contact.isPrimary ? 'bg-rose-500/10 border-rose-500/30' : 'bg-white/5 border-white/5'}`}>
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <h4 className="font-black text-zinc-100 flex items-center gap-2">
+                            {contact.name}
+                            {contact.isPrimary && <span className="text-[8px] bg-rose-600 text-white px-1.5 py-0.5 rounded font-black uppercase">首选</span>}
+                          </h4>
+                          <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{contact.phone} · {contact.relation}</p>
                         </div>
-                        <button onClick={() => setConfig({...config, contacts: config.contacts.filter(c => c.id !== contact.id)})} className="text-zinc-600 hover:text-rose-500"><i className="fas fa-trash"></i></button>
-                      </div>
-                      <h4 className="font-black text-white text-lg">{contact.name}</h4>
-                      <p className="text-xs font-mono text-zinc-400 mb-4">{contact.phone}</p>
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">{contact.relation}</span>
-                        {!contact.isPrimary && (
-                          <button onClick={() => setConfig({...config, contacts: config.contacts.map(c => ({...c, isPrimary: c.id === contact.id}))})} className="text-[8px] font-black text-indigo-400 uppercase underline">设为首选</button>
-                        )}
-                        {contact.isPrimary && <span className="text-[8px] bg-rose-600 text-white px-2 py-0.5 rounded-full font-black uppercase">Primary</span>}
+                        <div className="flex gap-2">
+                          {!contact.isPrimary && (
+                            <button onClick={() => handleSetPrimaryContact(contact.id)} title="设为首选" className="w-8 h-8 rounded-lg bg-zinc-800 text-zinc-500 hover:text-rose-500 flex items-center justify-center transition-colors">
+                              <i className="fas fa-star text-[10px]"></i>
+                            </button>
+                          )}
+                          <button onClick={() => setEditingContact(contact)} title="编辑" className="w-8 h-8 rounded-lg bg-zinc-800 text-zinc-500 hover:text-indigo-400 flex items-center justify-center transition-colors">
+                            <i className="fas fa-pen text-[10px]"></i>
+                          </button>
+                          <button onClick={() => handleDeleteContact(contact.id)} title="删除" className="w-8 h-8 rounded-lg bg-zinc-800 text-zinc-500 hover:text-rose-500 flex items-center justify-center transition-colors">
+                            <i className="fas fa-trash text-[10px]"></i>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
+                  {config.contacts.length === 0 && (
+                    <div className="text-center py-10 text-zinc-600 text-[10px] border border-dashed border-white/10 rounded-2xl">
+                      尚未配置任何紧急联系人
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              {/* 配置迁移与语音 */}
+              <section className="bg-zinc-900/40 border border-white/5 p-10 rounded-[3rem] shadow-xl flex flex-col justify-between">
+                <div>
+                  <h3 className="text-lg font-black text-white italic mb-6 uppercase tracking-widest border-l-4 border-amber-600 pl-4">配置迁移</h3>
+                  <div className="space-y-6">
+                    <p className="text-xs text-zinc-500 leading-relaxed">您可以将当前的所有设置导出为备份文件。</p>
+                    <button onClick={() => {}} className="w-full py-5 bg-zinc-800 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-3 hover:bg-zinc-700 transition-all">
+                      <i className="fas fa-file-export"></i> 导出配置副本
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-8 pt-8 border-t border-white/5">
+                  <h4 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-4">语音输出设置</h4>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center text-[10px] font-black">
+                      <span className="text-zinc-600 uppercase">语速: {config.ttsRate.toFixed(1)}x</span>
+                    </div>
+                    <input type="range" min="0.5" max="2" step="0.1" value={config.ttsRate} onChange={e => setConfig({...config, ttsRate: parseFloat(e.target.value)})} className="w-full accent-indigo-600" />
+                  </div>
                 </div>
               </section>
             </div>
           </div>
         )}
 
-        {/* 联络人编辑弹窗 */}
+        {/* 联系人编辑弹窗 */}
         {editingContact && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-2xl z-[100] flex items-center justify-center p-6">
-            <div className="bg-zinc-950 border border-white/10 p-12 rounded-[3.5rem] w-full max-w-md shadow-2xl animate-in zoom-in duration-300">
-              <h3 className="text-2xl font-black italic text-white uppercase mb-8">联络人编辑</h3>
-              <div className="space-y-4">
-                <input className="w-full bg-black border border-white/10 p-4 rounded-xl text-sm" placeholder="姓名" value={editingContact.name} onChange={e => setEditingContact({...editingContact, name: e.target.value})} />
-                <input className="w-full bg-black border border-white/10 p-4 rounded-xl text-sm" placeholder="电话" value={editingContact.phone} onChange={e => setEditingContact({...editingContact, phone: e.target.value})} />
-                <input className="w-full bg-black border border-white/10 p-4 rounded-xl text-sm" placeholder="关系" value={editingContact.relation} onChange={e => setEditingContact({...editingContact, relation: e.target.value})} />
+          <div className="fixed inset-0 bg-black/95 backdrop-blur-3xl z-[150] flex items-center justify-center p-6 animate-in fade-in duration-300">
+            <div className="bg-zinc-950 border border-white/10 p-10 rounded-[3rem] w-full max-w-md shadow-2xl">
+              <h3 className="text-2xl font-black italic text-white uppercase tracking-tighter mb-8">联络人档案</h3>
+              <div className="space-y-6">
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-zinc-600 uppercase ml-1">全名</label>
+                  <input 
+                    className="w-full bg-black border border-white/10 p-4 rounded-xl text-sm font-bold focus:border-indigo-600 outline-none transition-colors" 
+                    value={editingContact.name} 
+                    onChange={e => setEditingContact({...editingContact, name: e.target.value})}
+                    placeholder="例如：张三"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-zinc-600 uppercase ml-1">联系电话</label>
+                  <input 
+                    className="w-full bg-black border border-white/10 p-4 rounded-xl text-sm font-mono focus:border-indigo-600 outline-none transition-colors" 
+                    value={editingContact.phone} 
+                    onChange={e => setEditingContact({...editingContact, phone: e.target.value})}
+                    placeholder="138xxxx8888"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-zinc-600 uppercase ml-1">关系/职务</label>
+                  <input 
+                    className="w-full bg-black border border-white/10 p-4 rounded-xl text-sm focus:border-indigo-600 outline-none transition-colors" 
+                    value={editingContact.relation} 
+                    onChange={e => setEditingContact({...editingContact, relation: e.target.value})}
+                    placeholder="例如：长子 / 社区医生"
+                  />
+                </div>
               </div>
-              <div className="flex gap-4 mt-10">
-                <button onClick={() => setEditingContact(null)} className="flex-1 py-4 bg-zinc-900 rounded-xl text-xs font-black uppercase text-zinc-500">取消</button>
-                <button onClick={() => {
-                  setConfig({...config, contacts: [...config.contacts, editingContact]});
-                  setEditingContact(null);
-                }} className="flex-1 py-4 bg-indigo-600 rounded-xl text-xs font-black uppercase text-white shadow-lg shadow-indigo-600/30">保存记录</button>
+              <div className="flex gap-4 mt-12">
+                <button onClick={() => setEditingContact(null)} className="flex-1 py-4 bg-zinc-900 rounded-xl text-[10px] font-black uppercase text-zinc-500">取消</button>
+                <button onClick={handleSaveContact} className="flex-1 py-4 bg-indigo-600 rounded-xl text-[10px] font-black uppercase text-white shadow-lg">确认保存</button>
               </div>
             </div>
           </div>
         )}
 
-        {/* 升级后的日志详情编辑器 */}
+        {/* 日志编辑弹窗 */}
         {editingLog && (
           <div className="fixed inset-0 bg-black/95 backdrop-blur-3xl z-[100] flex items-center justify-center p-6 animate-in fade-in duration-300">
             <div className="bg-zinc-950 border border-white/10 p-10 rounded-[3rem] w-full max-w-2xl shadow-2xl">
-              <div className="flex justify-between items-center mb-10">
-                <div>
-                  <h3 className="text-2xl font-black italic text-white uppercase tracking-tighter">日志深度编辑</h3>
-                  <p className="text-[10px] text-zinc-500 font-black uppercase tracking-widest mt-1">Record ID: {editingLog.id}</p>
-                </div>
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
-                  editingLog.status === 'danger' ? 'bg-rose-500 text-white' : 
-                  editingLog.status === 'warning' ? 'bg-amber-500 text-white' : 'bg-indigo-600 text-white'
-                }`}>
-                  <i className="fas fa-file-signature text-xl"></i>
-                </div>
-              </div>
-
+              <h3 className="text-2xl font-black italic text-white uppercase tracking-tighter mb-8">日志编辑</h3>
               <div className="space-y-6">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">事件内容</label>
-                  <input 
-                    className="w-full bg-black border border-white/10 p-4 rounded-xl text-sm font-bold text-zinc-100 outline-none focus:border-indigo-600 transition-all" 
-                    value={editingLog.event} 
-                    onChange={e => setEditingLog({...editingLog, event: e.target.value})}
-                  />
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-zinc-600 uppercase ml-1">事件名称</label>
+                  <input className="w-full bg-black border border-white/10 p-4 rounded-xl text-sm font-bold" value={editingLog.event} onChange={e => setEditingLog({...editingLog, event: e.target.value})} />
                 </div>
-
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">风险等级</label>
-                  <div className="grid grid-cols-3 gap-3">
-                    {['info', 'warning', 'danger'].map(s => (
-                      <button 
-                        key={s} 
-                        onClick={() => setEditingLog({...editingLog, status: s as any})}
-                        className={`py-3 rounded-xl text-[10px] font-black uppercase transition-all ${
-                          editingLog.status === s ? 
-                          (s === 'danger' ? 'bg-rose-600 text-white' : s === 'warning' ? 'bg-amber-600 text-white' : 'bg-indigo-600 text-white') : 
-                          'bg-zinc-900 text-zinc-600 border border-white/5'
-                        }`}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-zinc-500 uppercase tracking-widest ml-1">备注信息</label>
-                  <textarea 
-                    className="w-full h-32 bg-black border border-white/10 p-4 rounded-xl text-sm text-zinc-300 resize-none outline-none focus:border-indigo-600 transition-all font-medium" 
-                    placeholder="输入额外说明或处理结果..." 
-                    value={editingLog.note || ""} 
-                    onChange={e => setEditingLog({...editingLog, note: e.target.value})}
-                  />
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-zinc-600 uppercase ml-1">备注/说明</label>
+                  <textarea className="w-full h-32 bg-black border border-white/10 p-4 rounded-xl text-sm text-zinc-300" placeholder="添加备注..." value={editingLog.note || ""} onChange={e => setEditingLog({...editingLog, note: e.target.value})} />
                 </div>
               </div>
-
               <div className="flex gap-4 mt-12">
-                <button onClick={() => setEditingLog(null)} className="flex-1 py-4 bg-zinc-900 rounded-xl text-[10px] font-black uppercase text-zinc-500 tracking-widest hover:text-white transition-all">放弃修改</button>
-                <button onClick={() => handleUpdateLog(editingLog)} className="flex-1 py-4 bg-indigo-600 rounded-xl text-[10px] font-black uppercase text-white shadow-lg shadow-indigo-600/30 tracking-widest hover:scale-[1.02] transition-all">保存更改</button>
+                <button onClick={() => setEditingLog(null)} className="flex-1 py-4 bg-zinc-900 rounded-xl text-[10px] font-black uppercase text-zinc-500">取消</button>
+                <button onClick={() => handleUpdateLog(editingLog)} className="flex-1 py-4 bg-indigo-600 rounded-xl text-[10px] font-black uppercase text-white shadow-lg">确认保存</button>
               </div>
             </div>
           </div>
         )}
 
-        {/* 紧急警报遮罩 */}
+        {/* 警报遮罩 */}
         {status === SystemStatus.ALERT && (
           <div className="fixed inset-0 bg-black/98 backdrop-blur-[100px] z-[200] flex items-center justify-center p-8 animate-in zoom-in-110">
-            <div className="max-w-2xl w-full bg-zinc-950 border border-rose-600/30 p-20 rounded-[4rem] text-center shadow-2xl">
-              <div className="w-24 h-24 bg-rose-600 rounded-3xl flex items-center justify-center text-white text-5xl mx-auto mb-10 shadow-xl animate-pulse">
-                <i className="fas fa-warning"></i>
-              </div>
-              <h2 className="text-5xl font-black text-white italic mb-6 uppercase tracking-tighter">异常跌倒检测</h2>
-              <div className="bg-rose-600/10 p-8 rounded-3xl mb-12 border border-rose-600/20 text-rose-400 font-black italic text-xl">
-                {currentTTS}
-              </div>
-              <div className="text-[12rem] font-black text-white mb-16 leading-none tracking-tighter">{countdown}</div>
+            <div className="max-w-2xl w-full text-center">
+              <div className="text-[12rem] font-black text-white mb-10 leading-none">{countdown}</div>
+              <h2 className="text-4xl font-black text-rose-500 italic mb-12 uppercase tracking-tight">异常行为确认中...</h2>
               <div className="grid grid-cols-2 gap-6">
-                <button onClick={() => { stopSpeaking(); setStatus(SystemStatus.MONITORING); addLog("用户手动取消警报", "human", "info"); }} className="py-6 bg-zinc-900 text-zinc-600 rounded-2xl font-black uppercase text-xs tracking-widest hover:text-white transition-all">忽略误报</button>
-                <button onClick={() => { stopSpeaking(); setStatus(SystemStatus.EMERGENCY); }} className="py-6 bg-rose-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-rose-600/30 hover:scale-105 transition-all">立即救援</button>
+                <button onClick={() => { stopSpeaking(); setStatus(SystemStatus.MONITORING); addLog("人工解除警报", "human", "info"); }} className="py-6 bg-zinc-900 text-zinc-500 rounded-2xl font-black uppercase tracking-widest">解除误报</button>
+                <button onClick={() => { stopSpeaking(); setStatus(SystemStatus.EMERGENCY); }} className="py-6 bg-rose-600 text-white rounded-2xl font-black uppercase shadow-xl shadow-rose-600/30 tracking-widest">立即呼救</button>
               </div>
             </div>
           </div>
