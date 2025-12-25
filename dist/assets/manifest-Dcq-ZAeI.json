@@ -1,0 +1,19 @@
+
+{
+  "short_name": "Guardian",
+  "name": "GuardianDepth AI - 智能跌倒监控系统",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3209/3209144.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#050505",
+  "background_color": "#050505",
+  "orientation": "portrait",
+  "description": "基于 AI 的高精度跌倒检测与紧急呼救系统"
+}

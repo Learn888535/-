@@ -1,0 +1,6 @@
+{
+	"appId": "com.guardiandepth.ai",
+	"appName": "Guardian AI",
+	"webDir": "dist",
+	"bundledWebRuntime": false
+}
